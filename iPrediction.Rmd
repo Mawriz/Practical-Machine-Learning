@@ -1,0 +1,192 @@
+---
+title: 'Practical Machine Learning: Prediction Assignment'
+author: "Mawriz"
+date: "July 28, 2016"
+output: html_document
+---
+#####Project setup
+```{r, warning = FALSE, message = FALSE}
+library(knitr)
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(rattle)
+library(ggplot2)
+library(randomForest)
+```
+
+
+####A) Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: [http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset)].
+
+This project is aimed at:
+- Predicting the manner in which the exercise was done, which is the "classe" variable.
+- Creating a report describing how the model was built and how cross validation was used.
+- Use the prediction model to predict 20 different test cases.
+
+####B) Data loading and manipulating
+```{r}
+set.seed(1)
+trainData <- read.csv("pml-training.csv")
+train <- createDataPartition(trainData $classe, p = 0.8, list = FALSE)
+trainX <- trainData [train,]
+testX <- trainData [-train,]
+testData <- read.csv("pml-testing.csv")
+dim(trainData)
+```
+
+```{r}
+# remove near zero variance predictors
+set.seed(1)
+nzv <- nearZeroVar(trainX[, names(trainX) != "classe"])
+trainX_filtered <- trainX[, -nzv]
+testX_filtered <- testX[, -nzv]
+
+dim(trainX_filtered)
+dim(testX_filtered)
+
+```
+
+
+```{r}
+#remove near all NA predictors. Predictors with mean NA > 0.7 will be left out
+set.seed(1)
+rmNa <- sapply(trainX_filtered[, names(trainX_filtered) != "classe"], function(x) mean(is.na(x))) > 0.7
+
+trainX_clean <- trainX_filtered[, rmNa==FALSE]
+testX_clean <- testX_filtered[, rmNa==FALSE]
+
+dim(trainX_clean)
+dim(testX_clean)
+```
+ 
+```{r}
+#remove first five variables. They are mere identification variables and won't be used in prediction.
+set.seed(1)
+str(trainX_clean[, 1:5])
+trainX_clean  <- trainX_clean[,-(1:5) ]
+testX_clean  <- testX_clean[,-(1:5) ]
+dim(trainX_clean)
+dim(testX_clean)
+```
+
+```{r}
+# check for colinear predictors and remove
+set.seed(1)
+corMatrix <- cor(trainX_clean[, names(trainX_clean) != "classe"])
+highlyCor <- findCorrelation(corMatrix, cutoff = .80) 
+
+# predictors with correlation of less than |0.8| will be used
+trainX_clean  <- trainX_clean[,-highlyCor ]
+testX_clean  <- testX_clean[,-highlyCor ]
+corTrain <- cor(trainX_clean[, names(trainX_clean) != "classe"])
+summary(corTrain[upper.tri(corTrain)])
+dim(trainX_clean)
+dim(testX_clean)
+names(trainX_clean)
+```
+
+####C) Model Building
+Four models will be analysed and the one with the highest accuracy used to predict the test dataset. In this exercise repeated cross validation, 10-fold cross validation and 3 repeats will be used to give a more robust estimate.
+
+**1. Rpart Model**
+
+```{r}
+set.seed(1)
+control <- trainControl(method = "repeatedcv", 
+                       number = 10, repeats = 3, 
+                       verboseIter = FALSE, 
+                       allowParallel = TRUE )
+
+metric <- "Accuracy"
+
+fit.rpart <- train(classe ~ .,data = trainX_clean, 
+                  method = "rpart", 
+                  preProc = c("scale", "center"), 
+                  metric = metric,
+                  trControl = control)    
+
+rpartPred <- predict(fit.rpart, testX_clean)
+dconfMatrix <- confusionMatrix(rpartPred, testX_clean$classe)
+dconfMatrix 
+```
+
+**2. Random Forest Model**
+
+```{r}
+set.seed(1)
+fit.rf <- train(classe ~ .,data = trainX_clean, 
+                  method = "rf", 
+                  preProc = c("scale", "center"),
+                  trControl = control)
+
+```
+
+```{r}
+# Prdict on test data
+randPred <- predict(fit.rf, testX_clean)
+rfMatrix <- confusionMatrix(data = randPred, testX_clean$classe)
+rfMatrix 
+```
+
+**3. Stochastic Gradient Boosting (Generalized Boosted Modeling)**
+```{r, results ='hide', warning = FALSE, message = FALSE}
+fit.gbm <- train(classe ~ .,data = trainX_clean, 
+                 method = "gbm", 
+                 metric = metric,
+                 trControl = control)
+```
+
+```{r}
+# Prdict on test data
+gbmPred <- predict(fit.gbm, testX_clean)
+gbmMatrix <- confusionMatrix(gbmPred, testX_clean$classe)
+gbmMatrix
+```
+```
+
+**4. Linear Discriminant Analysis**
+```{r}
+fit.lda <- train(classe ~ .,data = trainX_clean, 
+                 method = "lda", 
+                 metric = metric,
+                 preProc = c("scale", "center"),
+                 trControl = control)
+
+```
+
+```{r}
+# Prdict on test data
+ldaPred <- predict(fit.lda, testX_clean)
+ldaMatrix <- confusionMatrix(ldaPred, testX_clean$classe)
+ldaMatrix
+```
+
+
+###E). Model Selection
+
+We can now evaluate and compare them.
+
+```{r}
+results <- resamples(list(Rpart = fit.rpart,
+                    rf = fit.rf,
+                    gbm = fit.gbm,
+                    lda = fit.lda))
+#Table comparison
+summary(results)
+```
+From these results, it looks like ensembles of trees models (i.e. `rf` and `gbm`) do well on this problem. I would predict the test results from the random forest model.
+
+```{r}
+# boxplot comparison
+bwplot(results)
+```
+
+####E) Apply Selected Model to Test Data 
+
+```{r}
+final <- predict(fit.rf,  newdata = testData)
+final
+```
+
